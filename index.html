@@ -55,10 +55,11 @@
   }
   #name-input::placeholder { color: rgba(255,255,255,0.4); }
   #name-label {
-    color: #FFD700;
-    font-size: 16px;
-    margin-bottom: 8px;
-    text-shadow: 1px 1px 3px #000;
+    color: #fff;
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-shadow: 0 0 8px #000, 0 0 16px #000;
   }
   #name-submit {
     margin-top: 10px;
@@ -72,6 +73,18 @@
     font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
   }
   #name-submit:hover { background: #ff5a78; }
+  #name-skip {
+    margin-top: 8px;
+    background: #fff;
+    color: #333;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 24px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
+  }
+  #name-skip:hover { background: #e0e0e0; }
 </style>
 </head>
 <body>
@@ -81,6 +94,7 @@
   <div id="name-label">名前を入力してね</div>
   <input type="text" id="name-input" placeholder="なまえ" maxlength="10" autocomplete="off">
   <button id="name-submit">登録</button>
+  <button id="name-skip">スキップ</button>
 </div>
 </div>
 <script>
@@ -159,6 +173,15 @@ nameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     nameSubmit.click();
   }
+});
+
+const nameSkip = document.getElementById('name-skip');
+nameSkip.addEventListener('click', (e) => {
+  e.stopPropagation();
+  nameRegistered = true;
+  showingRanking = false;
+  hideNameInput();
+  resetGame();
 });
 
 // --- Base constants ---
@@ -706,4 +729,3 @@ gameLoop();
 </script>
 </body>
 </html>
-
