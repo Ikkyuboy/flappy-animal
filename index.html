@@ -27,6 +27,9 @@
     max-width: 100vw;
     max-height: 100vh;
     display: block;
+    will-change: transform;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   #name-overlay {
     display: none;
@@ -219,7 +222,7 @@ function getDifficulty(score) {
   return {
     pipeSpeed: BASE_PIPE_SPEED + level * 0.25,
     pipeGap: Math.max(BASE_PIPE_GAP - level * 4, 100),
-    pipeInterval: Math.max(BASE_PIPE_INTERVAL - level * 80, 900),
+    pipeInterval: Math.max(BASE_PIPE_INTERVAL - level * 80, 900) + (Math.floor(score) > 20 ? 50 : 0),
     pipeMovement: level >= 2,
     pipeAmplitude: Math.min(level * 8, 60),
     pipeOscillationSpeed: 0.02 + level * 0.003,
@@ -257,17 +260,17 @@ function spawnWeatherParticle() {
   }
 }
 
-function updateWeatherParticles() {
-  const maxParticles = currentWeather === 'rain' ? 80 : currentWeather === 'snow' ? 50 : 0;
+function updateWeatherParticles(scale) {
+  const maxParticles = currentWeather === 'rain' ? 60 : currentWeather === 'snow' ? 35 : 0;
   const spawnRate = currentWeather === 'rain' ? 3 : currentWeather === 'snow' ? 1 : 0;
   for (let i = 0; i < spawnRate; i++) {
     if (weatherParticles.length < maxParticles) spawnWeatherParticle();
   }
   for (let i = weatherParticles.length - 1; i >= 0; i--) {
     const p = weatherParticles[i];
-    p.y += p.speed;
-    if (currentWeather === 'rain') { p.x += p.wind; }
-    else if (currentWeather === 'snow') { p.wobble += p.wobbleSpeed; p.x += Math.sin(p.wobble) * 0.8; }
+    p.y += p.speed * scale;
+    if (currentWeather === 'rain') { p.x += p.wind * scale; }
+    else if (currentWeather === 'snow') { p.wobble += p.wobbleSpeed * scale; p.x += Math.sin(p.wobble) * 0.8 * scale; }
     if (p.y > H) weatherParticles.splice(i, 1);
   }
 }
@@ -314,10 +317,10 @@ function spawnBgBird() {
   });
 }
 
-function updateBgBirds() {
+function updateBgBirds(scale) {
   if (Math.random() < 0.008) spawnBgBird();
   for (let i = bgBirds.length - 1; i >= 0; i--) {
-    const b = bgBirds[i]; b.x += b.vx; b.wingPhase += b.wingSpeed; b.yWobble += 0.02; b.y += Math.sin(b.yWobble) * b.yWobbleAmp;
+    const b = bgBirds[i]; b.x += b.vx * scale; b.wingPhase += b.wingSpeed * scale; b.yWobble += 0.02 * scale; b.y += Math.sin(b.yWobble) * b.yWobbleAmp * scale;
     if (b.x < -40 || b.x > W + 40) bgBirds.splice(i, 1);
   }
 }
@@ -351,9 +354,9 @@ function triggerKoji() {
   kojiTriggered = true;
 }
 
-function updateKoji() {
+function updateKoji(scale) {
   if (!kojiActive) return;
-  kojiX -= 3.5;
+  kojiX -= 3.5 * scale;
   if (kojiX < -350) kojiActive = false;
 }
 
@@ -365,7 +368,7 @@ function drawKoji() {
   ctx.textBaseline = 'top';
   // Glow
   ctx.shadowColor = '#FF0000';
-  ctx.shadowBlur = 25;
+  ctx.shadowBlur = 12;
   // Outline
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 6;
@@ -551,7 +554,7 @@ function drawPipe(p) {
   const grad1 = ctx.createLinearGradient(p.x, 0, p.x + pw, 0);
   grad1.addColorStop(0, '#2E7D32'); grad1.addColorStop(0.3, '#66BB6A'); grad1.addColorStop(0.7, '#43A047'); grad1.addColorStop(1, '#1B5E20');
 
-  if (p.moving && gameState === 'playing') { ctx.shadowColor = 'rgba(255,100,100,0.3)'; ctx.shadowBlur = 12; }
+  if (p.moving && gameState === 'playing') { ctx.shadowColor = 'rgba(255,100,100,0.3)'; ctx.shadowBlur = 6; }
 
   // Top pipe
   ctx.fillStyle = grad1;
@@ -821,7 +824,7 @@ function drawDeadScreen() {
   ctx.fillStyle = '#E94560'; ctx.strokeStyle = '#000'; ctx.lineWidth = 5;
   ctx.font = 'bold 42px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
   ctx.strokeText('GAME OVER', W / 2, 180); ctx.fillText('GAME OVER', W / 2, 180);
-  const msgs = ['顔面着陸ｗｗｗ', '痛そう…🤣', 'もう一回？😏', '翼が足りなかった…', '顔から突っ込むなｗ', '重力には勝てない💀', 'ﾌﾞﾁｯ（潰れる音）'];
+  const msgs = ['顔面着陸ｗｗｗ', '痛そう…🤣', 'もう一回？😏', '翼が足りなかった…', '顔から突っ込むなｗ', '重力には勝てない💀', 'ﾌﾞﾁｯ（潰れる音）', 'バナナが足りなかった...', 'SEXYなスコアだな！', 'ここで終わってもSEXY'];
   ctx.font = '22px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
   ctx.strokeText(msgs[Math.floor(score) % msgs.length], W / 2, 230); ctx.fillText(msgs[Math.floor(score) % msgs.length], W / 2, 230);
   ctx.font = '28px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFF';
@@ -884,22 +887,26 @@ function drawRankingScreen() {
 }
 
 // --- Main loop ---
-function update() {
+let lastTime = 0;
+const TARGET_DT = 1000 / 60; // 60fps baseline
+
+function update(dt) {
+  const scale = dt / TARGET_DT; // 1.0 at 60fps, >1 if slower
   frameCount++;
-  updateBgBirds();
-  updateWeatherParticles();
-  updateKoji();
+  updateBgBirds(scale);
+  updateWeatherParticles(scale);
+  updateKoji(scale);
 
   if (gameState === 'playing') {
     const diff = getDifficulty(score);
-    bird.vy += GRAVITY; bird.y += bird.vy;
+    bird.vy += GRAVITY * scale; bird.y += bird.vy * scale;
     const now = Date.now();
     if (now - lastPipeTime > diff.pipeInterval) { spawnPipe(); lastPipeTime = now; }
 
     for (let i = pipes.length - 1; i >= 0; i--) {
-      pipes[i].x -= diff.pipeSpeed;
+      pipes[i].x -= diff.pipeSpeed * scale;
       if (pipes[i].moving) {
-        pipes[i].phase += pipes[i].oscillationSpeed;
+        pipes[i].phase += pipes[i].oscillationSpeed * scale;
         const offset = Math.sin(pipes[i].phase) * pipes[i].amplitude;
         const newTopH = pipes[i].baseTopH + offset;
         const minTop = 30; const maxTop = H - GROUND_HEIGHT - pipes[i].gap - 30;
@@ -923,7 +930,7 @@ function update() {
 
   if (gameState === 'dead') {
     bird.deadTimer++;
-    if (bird.y < H - GROUND_HEIGHT - bird.radius) { bird.vy += GRAVITY * 0.5; bird.y += bird.vy; }
+    if (bird.y < H - GROUND_HEIGHT - bird.radius) { bird.vy += GRAVITY * 0.5 * scale; bird.y += bird.vy * scale; }
   }
 
   if (gameState === 'start') { bird.y = H / 2 + Math.sin(frameCount * 0.04) * 15; }
@@ -958,8 +965,17 @@ function draw() {
   drawMuteButton();
 }
 
-function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
-gameLoop();
+function gameLoop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  let dt = timestamp - lastTime;
+  lastTime = timestamp;
+  // Clamp to avoid spiral of death on tab switch
+  if (dt > 100) dt = TARGET_DT;
+  update(dt);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
 </script>
 </body>
 </html>
