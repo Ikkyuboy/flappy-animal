@@ -181,7 +181,7 @@ function hideNameInput() {
 nameSubmit.addEventListener('click', async (e) => {
   e.stopPropagation();
   const name = nameInput.value.trim() || '名無し';
-  await saveRanking(name, score);
+  await saveRanking(name, Math.floor(score));
   nameRegistered = true;
   showingRanking = true;
   hideNameInput();
@@ -340,13 +340,85 @@ function drawBgBirds() { for (const b of bgBirds) drawBgBird(b); }
 let bird, pipes, score, bestScore, gameState, lastPipeTime, frameCount;
 bestScore = 0;
 
+// --- 52(コージ) scrolling text ---
+let kojiActive = false;
+let kojiX = 0;
+let kojiTriggered = false;
+
+function triggerKoji() {
+  kojiActive = true;
+  kojiX = W + 10;
+  kojiTriggered = true;
+}
+
+function updateKoji() {
+  if (!kojiActive) return;
+  kojiX -= 3.5;
+  if (kojiX < -350) kojiActive = false;
+}
+
+function drawKoji() {
+  if (!kojiActive) return;
+  ctx.save();
+  ctx.font = 'bold italic 64px "Impact", "Arial Black", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  // Glow
+  ctx.shadowColor = '#FF0000';
+  ctx.shadowBlur = 25;
+  // Outline
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 6;
+  ctx.strokeText('52(コージ)', kojiX, 80);
+  // Main fill - hot gradient
+  const grad = ctx.createLinearGradient(kojiX, 80, kojiX, 140);
+  grad.addColorStop(0, '#FFD700');
+  grad.addColorStop(0.5, '#FF4500');
+  grad.addColorStop(1, '#FF0000');
+  ctx.fillStyle = grad;
+  ctx.fillText('52(コージ)', kojiX, 80);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// --- Banana ripeness system ---
+const BANANA_TYPES = [
+  { name: '青バナナ', fill: '#A8D948', stroke: '#6B9B1E', tip: '#4A7A10', spots: 0, multi: 1.6, weight: 10 },
+  { name: '若バナナ', fill: '#D4E34A', stroke: '#A0AE20', tip: '#6B7A14', spots: 0, multi: 1.0, weight: 25 },
+  { name: 'バナナ', fill: '#FFE135', stroke: '#C8A200', tip: '#8B6914', spots: 0, multi: 1.0, weight: 25 },
+  { name: '甘バナナ', fill: '#FFCC00', stroke: '#B8900A', tip: '#6B5010', spots: 5, multi: 2.0, weight: 5 },
+  { name: '完熟バナナ', fill: '#F0B800', stroke: '#A07000', tip: '#5A3A08', spots: 10, multi: 1.2, weight: 20 },
+  { name: '激熟バナナ', fill: '#D4960A', stroke: '#8B6508', tip: '#4A3006', spots: 18, multi: 1.4, weight: 15 },
+];
+let bananaType = BANANA_TYPES[2];
+let bananaSpotSeeds = [];
+
+function pickBanana() {
+  const totalWeight = BANANA_TYPES.reduce((s, b) => s + b.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const b of BANANA_TYPES) {
+    roll -= b.weight;
+    if (roll <= 0) { bananaType = b; break; }
+  }
+  bananaSpotSeeds = [];
+  for (let i = 0; i < bananaType.spots; i++) {
+    bananaSpotSeeds.push({
+      cx: -20 + Math.random() * 18,
+      cy: -8 + Math.random() * 10,
+      r: 1 + Math.random() * 2.2
+    });
+  }
+}
+
 function resetGame() {
   bird = { x: 80, y: H / 2, vy: 0, radius: 28, wingAngle: 0, wingDir: 1, rotation: 0, deadTimer: 0, eyeState: 'normal' };
   pipes = []; score = 0; gameState = 'start'; lastPipeTime = 0; frameCount = 0;
   weatherParticles = []; bgBirds = [];
   nameRegistered = false; showingRanking = false;
+  kojiActive = false; kojiTriggered = false;
   hideNameInput();
-  pickWeather(); generateStars();
+  pickWeather(); generateStars(); pickBanana();
 }
 
 resetGame();
@@ -511,31 +583,118 @@ function drawBird() {
   else { ctx.rotate(Math.min(bird.vy * 0.04, 0.8)); }
   const r = bird.radius;
 
-  // Legs
-  const legSwing = gameState === 'dead' ? Math.sin(bird.deadTimer * 0.3) * 0.6 : Math.sin(frameCount * 0.15) * 0.3;
-  ctx.strokeStyle = '#D4A574'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-  ctx.save(); ctx.translate(-8, r - 2); ctx.rotate(legSwing - 0.15);
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 18); ctx.stroke();
-  ctx.fillStyle = '#8B4513'; ctx.beginPath(); ctx.ellipse(0, 20, 6, 3, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-  ctx.save(); ctx.translate(8, r - 2); ctx.rotate(-legSwing + 0.15);
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 18); ctx.stroke();
-  ctx.fillStyle = '#8B4513'; ctx.beginPath(); ctx.ellipse(0, 20, 6, 3, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  // Championship belt
+  const beltY = r - 2;
+  const beltSway = gameState === 'dead' ? Math.sin(bird.deadTimer * 0.15) * 0.1 : Math.sin(frameCount * 0.04) * 0.03;
+  ctx.save();
+  ctx.translate(0, beltY);
+  ctx.rotate(beltSway);
 
-  // Wings
-  bird.wingAngle += bird.wingDir * 0.2;
-  if (bird.wingAngle > 1.0 || bird.wingAngle < -0.5) bird.wingDir *= -1;
-  if (gameState === 'playing' && bird.vy < -2) bird.wingAngle += bird.wingDir * 0.3;
-  const wingFlap = Math.sin(bird.wingAngle * Math.PI) * 12;
-  ctx.save(); ctx.translate(-r - 2, -2);
-  ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#C8A200'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.ellipse(-10, wingFlap, 16, 8, -0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = '#B8860B'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(-5, wingFlap - 3); ctx.lineTo(-18, wingFlap); ctx.stroke(); ctx.restore();
-  ctx.save(); ctx.translate(r + 2, -2);
-  ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#C8A200'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.ellipse(10, wingFlap, 16, 8, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = '#B8860B'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(5, wingFlap - 3); ctx.lineTo(18, wingFlap); ctx.stroke(); ctx.restore();
+  // Belt connecting band (red leather) - behind plate
+  ctx.fillStyle = '#A00000';
+  ctx.fillRect(-r - 4, 2, r * 2 + 8, 10);
+  ctx.strokeStyle = '#DAA520'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-r - 4, 2); ctx.lineTo(r + 4, 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-r - 4, 12); ctx.lineTo(r + 4, 12); ctx.stroke();
+
+  // Belt straps (left & right)
+  ctx.fillStyle = '#8B0000';
+  ctx.fillRect(-r - 4, -2, 14, 18);
+  ctx.fillRect(r - 10, -2, 14, 18);
+  ctx.fillStyle = '#DAA520';
+  ctx.fillRect(-r - 4, -2, 14, 2);
+  ctx.fillRect(-r - 4, 14, 14, 2);
+  ctx.fillRect(r - 10, -2, 14, 2);
+  ctx.fillRect(r - 10, 14, 14, 2);
+
+  // Center plate (gold)
+  const plateW = 44, plateH = 24;
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#B8860B';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(-plateW / 2, -4, plateW, plateH, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner plate shine
+  const plateGrad = ctx.createLinearGradient(0, -4, 0, plateH - 4);
+  plateGrad.addColorStop(0, 'rgba(255,255,220,0.6)');
+  plateGrad.addColorStop(0.4, 'rgba(255,215,0,0.1)');
+  plateGrad.addColorStop(1, 'rgba(184,134,11,0.3)');
+  ctx.fillStyle = plateGrad;
+  ctx.beginPath();
+  ctx.roundRect(-plateW / 2 + 2, -2, plateW - 4, plateH - 4, 3);
+  ctx.fill();
+
+  // Small star decorations on plate
+  ctx.fillStyle = '#FFF8DC';
+  for (let sx = -1; sx <= 1; sx += 2) {
+    ctx.beginPath();
+    ctx.arc(sx * 16, plateH / 2 - 4, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // "SEXY" text - BIG and on top
+  ctx.font = 'bold italic 16px "Impact", "Arial Black", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.strokeText('SEXY', 0, plateH / 2 - 4);
+  ctx.fillStyle = '#FFF';
+  ctx.fillText('SEXY', 0, plateH / 2 - 4);
+
+  ctx.restore();
+
+  // Banana wings (slow & graceful)
+  bird.wingAngle += bird.wingDir * 0.06;
+  if (bird.wingAngle > 0.6 || bird.wingAngle < -0.3) bird.wingDir *= -1;
+  if (gameState === 'playing' && bird.vy < -2) bird.wingAngle += bird.wingDir * 0.08;
+  const wingFlap = Math.sin(bird.wingAngle * Math.PI) * 6;
+
+  function drawBanana(flipX) {
+    const dir = flipX ? 1 : -1;
+    ctx.fillStyle = bananaType.fill; ctx.strokeStyle = bananaType.stroke; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(dir * 18, -14, dir * 24, 0);
+    ctx.quadraticCurveTo(dir * 18, 6, 0, 0);
+    ctx.fill(); ctx.stroke();
+    // Ripeness overlay for mature bananas (gradient streaks)
+    if (bananaType.spots > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(dir * 18, -14, dir * 24, 0);
+      ctx.quadraticCurveTo(dir * 18, 6, 0, 0);
+      ctx.clip();
+      const grad = ctx.createLinearGradient(0, -8, dir * 24, 4);
+      const intensity = Math.min(bananaType.spots / 18, 1);
+      grad.addColorStop(0, 'rgba(120,70,10,' + (intensity * 0.15) + ')');
+      grad.addColorStop(0.3, 'rgba(90,50,5,' + (intensity * 0.35) + ')');
+      grad.addColorStop(0.5, 'rgba(120,70,10,' + (intensity * 0.1) + ')');
+      grad.addColorStop(0.7, 'rgba(80,45,5,' + (intensity * 0.4) + ')');
+      grad.addColorStop(1, 'rgba(100,60,10,' + (intensity * 0.2) + ')');
+      ctx.fillStyle = grad;
+      ctx.fillRect(dir > 0 ? -2 : -26, -14, 28, 22);
+      ctx.restore();
+    }
+    // Tips
+    ctx.fillStyle = bananaType.tip;
+    ctx.beginPath(); ctx.arc(dir * 24, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Left banana
+  ctx.save(); ctx.translate(-r - 4, wingFlap - 2); ctx.rotate(-0.4);
+  drawBanana(false);
+  ctx.restore();
+
+  // Right banana
+  ctx.save(); ctx.translate(r + 4, wingFlap - 2); ctx.rotate(0.4);
+  drawBanana(true);
+  ctx.restore();
 
   // Face
   ctx.save();
@@ -584,7 +743,7 @@ function drawStar(x, y, outerR, innerR) {
 function drawScore() {
   ctx.fillStyle = '#FFF'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
   ctx.font = 'bold 48px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
-  ctx.strokeText(score, W / 2, 60); ctx.fillText(score, W / 2, 60);
+  ctx.strokeText(Math.floor(score), W / 2, 60); ctx.fillText(Math.floor(score), W / 2, 60);
 }
 
 function drawLevelIndicator() {
@@ -639,15 +798,21 @@ function drawStartScreen() {
   ctx.font = '15px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
   ctx.strokeText('今日の天気: ' + (icons[currentWeather] || ''), W / 2, 490); ctx.fillText('今日の天気: ' + (icons[currentWeather] || ''), W / 2, 490);
 
+  ctx.font = '15px "Segoe UI", sans-serif'; ctx.fillStyle = bananaType.fill;
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+  const bananaLabel = '🍌 今回の羽: ' + bananaType.name;
+  ctx.strokeText(bananaLabel, W / 2, 510);
+  ctx.fillText(bananaLabel, W / 2, 510);
+
   // Show ranking on start screen if available
   if (rankings.length > 0) {
     ctx.font = 'bold 14px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700';
     ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-    ctx.strokeText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 520);
-    ctx.fillText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 520);
+    ctx.strokeText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 540);
+    ctx.fillText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 540);
   } else if (bestScore > 0) {
     ctx.font = '18px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-    ctx.strokeText('🏆 ベスト: ' + bestScore, W / 2, 520); ctx.fillText('🏆 ベスト: ' + bestScore, W / 2, 520);
+    ctx.strokeText('🏆 ベスト: ' + bestScore, W / 2, 540); ctx.fillText('🏆 ベスト: ' + bestScore, W / 2, 540);
   }
 }
 
@@ -658,13 +823,13 @@ function drawDeadScreen() {
   ctx.strokeText('GAME OVER', W / 2, 180); ctx.fillText('GAME OVER', W / 2, 180);
   const msgs = ['顔面着陸ｗｗｗ', '痛そう…🤣', 'もう一回？😏', '翼が足りなかった…', '顔から突っ込むなｗ', '重力には勝てない💀', 'ﾌﾞﾁｯ（潰れる音）'];
   ctx.font = '22px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
-  ctx.strokeText(msgs[score % msgs.length], W / 2, 230); ctx.fillText(msgs[score % msgs.length], W / 2, 230);
+  ctx.strokeText(msgs[Math.floor(score) % msgs.length], W / 2, 230); ctx.fillText(msgs[Math.floor(score) % msgs.length], W / 2, 230);
   ctx.font = '28px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFF';
-  ctx.strokeText('スコア: ' + score, W / 2, 300); ctx.fillText('スコア: ' + score, W / 2, 300);
+  ctx.strokeText('スコア: ' + Math.floor(score), W / 2, 300); ctx.fillText('スコア: ' + Math.floor(score), W / 2, 300);
   const diff = getDifficulty(score);
   ctx.font = '16px "Segoe UI", sans-serif'; ctx.fillStyle = '#CCC';
   ctx.fillText('到達レベル: ' + diff.level, W / 2, 330);
-  if (score >= bestScore && score > 0) {
+  if (Math.floor(score) >= bestScore && score > 0) {
     ctx.font = '18px "Segoe UI", sans-serif'; ctx.fillStyle = '#FF6B6B';
     ctx.fillText('🎉 NEW RECORD!', W / 2, 360);
   }
@@ -723,6 +888,7 @@ function update() {
   frameCount++;
   updateBgBirds();
   updateWeatherParticles();
+  updateKoji();
 
   if (gameState === 'playing') {
     const diff = getDifficulty(score);
@@ -740,13 +906,18 @@ function update() {
         pipes[i].topH = Math.max(minTop, Math.min(maxTop, newTopH));
       }
       const pw = pipes[i].moving ? PIPE_WIDTH + MOVING_PIPE_EXTRA : PIPE_WIDTH;
-      if (!pipes[i].scored && pipes[i].x + pw < bird.x) { pipes[i].scored = true; score++; }
+      if (!pipes[i].scored && pipes[i].x + pw < bird.x) {
+        pipes[i].scored = true;
+        const prevScore = score;
+        score += bananaType.multi;
+        if (Math.floor(prevScore) < 52 && Math.floor(score) >= 52 && !kojiTriggered) triggerKoji();
+      }
       if (pipes[i].x + pw < -10) pipes.splice(i, 1);
     }
 
     if (checkCollision()) {
       gameState = 'dead'; bird.eyeState = 'dead';
-      if (score > bestScore) bestScore = score;
+      if (Math.floor(score) > bestScore) bestScore = Math.floor(score);
     }
   }
 
@@ -783,6 +954,7 @@ function draw() {
   } else if (gameState === 'dead') {
     drawScore(); drawDeadScreen();
   }
+  drawKoji();
   drawMuteButton();
 }
 
