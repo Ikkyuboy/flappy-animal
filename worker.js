@@ -72,7 +72,7 @@ export default {
     if (url.pathname === '/api/rankings' && request.method === 'GET') {
       try {
         const data = await env.RANKINGS.get('world_rankings', 'json');
-        const rankings = data || [];
+        const rankings = (data || []).map(({ name, score, date }) => ({ name, score, date }));
         return new Response(JSON.stringify({ rankings }), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         });
@@ -131,12 +131,31 @@ export default {
         const data = await env.RANKINGS.get('world_rankings', 'json');
         const rankings = data || [];
         const sanitizedName = name.replace(/[<>&"']/g, '').slice(0, 10);
-        rankings.push({
+        const newEntry = {
           name: sanitizedName,
           score: Math.floor(score),
           date: new Date().toISOString().split('T')[0],
-          ip: ip.slice(0, 8) + '...' // partial IP for dedup
-        });
+          ip: ip
+        };
+
+        // Limit to top 3 scores per IP
+        const sameIpScores = rankings.filter(r => r.ip === ip);
+        if (sameIpScores.length >= 3) {
+          // Check if new score beats the worst of this IP's top 3
+          sameIpScores.sort((a, b) => b.score - a.score);
+          const worst = sameIpScores[2];
+          if (newEntry.score <= worst.score) {
+            return new Response(JSON.stringify({ error: 'You already have 3 higher scores' }), {
+              status: 200,
+              headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+            });
+          }
+          // Remove the worst score from this IP to make room
+          const worstIdx = rankings.findIndex(r => r.ip === ip && r.score === worst.score);
+          if (worstIdx !== -1) rankings.splice(worstIdx, 1);
+        }
+
+        rankings.push(newEntry);
         rankings.sort((a, b) => b.score - a.score);
         const trimmed = rankings.slice(0, MAX_RANKINGS);
         await env.RANKINGS.put('world_rankings', JSON.stringify(trimmed));
