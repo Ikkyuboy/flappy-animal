@@ -135,9 +135,69 @@ function toggleMute() {
   bgm.muted = bgmMuted;
 }
 
-// --- Ranking system (persistent storage) ---
+// --- Ranking system (local + world) ---
+const RANKING_API = 'https://flappy-ranking.bose-no-ikkyu.workers.dev';
 let rankings = [];
+let worldRankings = [];
 let rankingsLoaded = false;
+let showWorldRanking = true; // toggle between local/world
+
+// --- Anti-cheat session tracking ---
+let acSession = null;
+function acReset() {
+  acSession = {
+    startTime: 0,
+    jumps: [],
+    pipePassTimes: [],
+    frameHist: [],
+    seed: Math.random().toString(36).slice(2, 10)
+  };
+}
+acReset();
+
+function acRecordJump() {
+  if (!acSession || !acSession.startTime) return;
+  acSession.jumps.push(Date.now() - acSession.startTime);
+}
+
+function acRecordPipePass(pipeScore) {
+  if (!acSession || !acSession.startTime) return;
+  acSession.pipePassTimes.push({ t: Date.now() - acSession.startTime, s: pipeScore });
+}
+
+function acRecordFrame(dt) {
+  if (!acSession || !acSession.startTime) return;
+  // Sample every 30 frames to keep data small
+  if (acSession.frameHist.length < 200 && frameCount % 30 === 0) {
+    acSession.frameHist.push(Math.round(dt * 100) / 100);
+  }
+}
+
+function acGenerateToken(finalScore) {
+  // Generate verification token from gameplay data
+  const data = acSession;
+  const duration = Date.now() - data.startTime;
+  const jumpCount = data.jumps.length;
+  const pipeCount = data.pipePassTimes.length;
+  // Simple hash: combine gameplay metrics
+  const raw = data.seed + '|' + finalScore + '|' + duration + '|' + jumpCount + '|' + pipeCount + '|' + data.frameHist.length;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    hash = ((hash << 5) - hash) + c;
+    hash |= 0;
+  }
+  return {
+    seed: data.seed,
+    duration: duration,
+    jumpCount: jumpCount,
+    pipeCount: pipeCount,
+    jumpIntervals: data.jumps.slice(0, 50),
+    pipeTimes: data.pipePassTimes.slice(0, 50),
+    frameSamples: data.frameHist,
+    hash: Math.abs(hash).toString(36)
+  };
+}
 
 async function loadRankings() {
   try {
@@ -149,16 +209,53 @@ async function loadRankings() {
     rankings = [];
   }
   rankingsLoaded = true;
+  loadWorldRankings();
+}
+
+async function loadWorldRankings() {
+  try {
+    const res = await fetch(RANKING_API + '/api/rankings');
+    if (res.ok) {
+      const data = await res.json();
+      worldRankings = data.rankings || [];
+    }
+  } catch (e) {
+    console.warn('World ranking fetch failed:', e);
+  }
 }
 
 async function saveRanking(name, sc) {
+  // Save locally
   rankings.push({ name: name, score: sc, date: new Date().toLocaleDateString('ja-JP') });
   rankings.sort((a, b) => b.score - a.score);
-  rankings = rankings.slice(0, 10); // keep top 10
+  rankings = rankings.slice(0, 10);
   try {
     await window.storage.set('flappy_rankings', JSON.stringify(rankings));
   } catch (e) {
     console.error('Failed to save ranking:', e);
+  }
+  // Submit to world ranking with anti-cheat
+  submitWorldScore(name, sc);
+}
+
+async function submitWorldScore(name, sc) {
+  try {
+    const token = acGenerateToken(sc);
+    const res = await fetch(RANKING_API + '/api/scores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        score: sc,
+        verification: token
+      })
+    });
+    if (res.ok) {
+      // Refresh world rankings after submit
+      await loadWorldRankings();
+    }
+  } catch (e) {
+    console.warn('World score submit failed:', e);
   }
 }
 
@@ -210,7 +307,7 @@ nameSkip.addEventListener('click', (e) => {
 const GRAVITY = 0.45;
 const JUMP_FORCE = -7.5;
 const PIPE_WIDTH = 60;
-const MOVING_PIPE_EXTRA = 16;
+const MOVING_PIPE_EXTRA = 0; // moving pipes now same width as static
 const BASE_PIPE_GAP = 155;
 const BASE_PIPE_SPEED = 2.5;
 const BASE_PIPE_INTERVAL = 1600;
@@ -219,9 +316,11 @@ const GROUND_HEIGHT = 60;
 // --- Difficulty system ---
 function getDifficulty(score) {
   const level = Math.min(Math.floor(score / 5), 10);
+  const baseGap = Math.max(BASE_PIPE_GAP - level * 4, 100);
+  const gapBonus = Math.floor(score) >= 25 ? 12 : 0;
   return {
     pipeSpeed: BASE_PIPE_SPEED + level * 0.25,
-    pipeGap: Math.max(BASE_PIPE_GAP - level * 4, 100),
+    pipeGap: baseGap + gapBonus,
     pipeInterval: Math.max(BASE_PIPE_INTERVAL - level * 80, 900) + (Math.floor(score) > 20 ? 50 : 0),
     pipeMovement: level >= 2,
     pipeAmplitude: Math.min(level * 8, 60),
@@ -420,6 +519,7 @@ function resetGame() {
   weatherParticles = []; bgBirds = [];
   nameRegistered = false; showingRanking = false;
   kojiActive = false; kojiTriggered = false;
+  acReset();
   hideNameInput();
   pickWeather(); generateStars(); pickBanana();
 }
@@ -437,8 +537,9 @@ function jump() {
   }
   if (gameState === 'start') {
     gameState = 'playing'; bird.vy = JUMP_FORCE; lastPipeTime = Date.now();
+    acReset(); acSession.startTime = Date.now();
   } else if (gameState === 'playing') {
-    bird.vy = JUMP_FORCE;
+    bird.vy = JUMP_FORCE; acRecordJump();
   } else if (gameState === 'dead' && bird.deadTimer > 40) {
     if (!nameRegistered) {
       showNameInput();
@@ -465,16 +566,19 @@ function isInMuteBtn(pos) {
          pos.y >= MUTE_BTN.y && pos.y <= MUTE_BTN.y + MUTE_BTN.h;
 }
 
-canvas.addEventListener('click', (e) => {
-  const pos = getCanvasPos(e);
+function handleTapAt(pos) {
   if (isInMuteBtn(pos)) { toggleMute(); return; }
+  if (showingRanking) {
+    // Left side: switch to world, Right side: switch to local, Center: retry
+    if (pos.x < W / 3) { showWorldRanking = true; return; }
+    if (pos.x > W * 2 / 3) { showWorldRanking = false; return; }
+    // Center tap → retry
+  }
   jump();
-});
+}
+canvas.addEventListener('click', (e) => { handleTapAt(getCanvasPos(e)); });
 canvas.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  const pos = getCanvasPos(e);
-  if (isInMuteBtn(pos)) { toggleMute(); return; }
-  jump();
+  e.preventDefault(); handleTapAt(getCanvasPos(e));
 }, { passive: false });
 document.addEventListener('keydown', (e) => {
   if (nameOverlay.classList.contains('active')) return;
@@ -807,15 +911,22 @@ function drawStartScreen() {
   ctx.strokeText(bananaLabel, W / 2, 510);
   ctx.fillText(bananaLabel, W / 2, 510);
 
-  // Show ranking on start screen if available
-  if (rankings.length > 0) {
-    ctx.font = 'bold 14px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700';
+  // Show world ranking top on start screen
+  if (worldRankings.length > 0) {
+    ctx.font = 'bold 13px "Segoe UI", sans-serif'; ctx.fillStyle = '#FF6B6B';
     ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-    ctx.strokeText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 540);
-    ctx.fillText('🏆 トップ: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 540);
+    ctx.strokeText('WORLD 1st: ' + worldRankings[0].name + ' - ' + worldRankings[0].score, W / 2, 535);
+    ctx.fillText('WORLD 1st: ' + worldRankings[0].name + ' - ' + worldRankings[0].score, W / 2, 535);
+  }
+  // Show local ranking or best score
+  if (rankings.length > 0) {
+    ctx.font = 'bold 13px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+    ctx.strokeText('LOCAL 1st: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 555);
+    ctx.fillText('LOCAL 1st: ' + rankings[0].name + ' - ' + rankings[0].score, W / 2, 555);
   } else if (bestScore > 0) {
-    ctx.font = '18px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-    ctx.strokeText('🏆 ベスト: ' + bestScore, W / 2, 540); ctx.fillText('🏆 ベスト: ' + bestScore, W / 2, 540);
+    ctx.font = '14px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+    ctx.strokeText('BEST: ' + bestScore, W / 2, 555); ctx.fillText('BEST: ' + bestScore, W / 2, 555);
   }
 }
 
@@ -850,40 +961,65 @@ function drawDeadScreen() {
 function drawRankingScreen() {
   ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
-  ctx.font = 'bold 32px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
-  ctx.strokeText('🏆 ランキング', W / 2, 70); ctx.fillText('🏆 ランキング', W / 2, 70);
 
+  // Tab selector: World / Local
+  const tabY = 40;
+  const worldLabel = 'WORLD';
+  const localLabel = 'LOCAL';
+  ctx.font = 'bold 16px "Segoe UI", sans-serif';
+  // World tab
+  ctx.fillStyle = showWorldRanking ? '#FFD700' : '#666';
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+  ctx.strokeText(worldLabel, W / 2 - 60, tabY); ctx.fillText(worldLabel, W / 2 - 60, tabY);
+  if (showWorldRanking) { ctx.fillStyle = '#FFD700'; ctx.fillRect(W / 2 - 90, tabY + 4, 60, 2); }
+  // Local tab
+  ctx.fillStyle = !showWorldRanking ? '#FFD700' : '#666';
+  ctx.strokeText(localLabel, W / 2 + 60, tabY); ctx.fillText(localLabel, W / 2 + 60, tabY);
+  if (!showWorldRanking) { ctx.fillStyle = '#FFD700'; ctx.fillRect(W / 2 + 30, tabY + 4, 60, 2); }
+
+  const title = showWorldRanking ? 'WORLD RANKING' : 'LOCAL RANKING';
+  ctx.font = 'bold 28px "Segoe UI", sans-serif'; ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+  ctx.strokeText(title, W / 2, 80); ctx.fillText(title, W / 2, 80);
+
+  const displayRankings = showWorldRanking ? worldRankings : rankings;
   const startY = 120;
-  const lineH = 40;
-  for (let i = 0; i < Math.min(rankings.length, 10); i++) {
-    const r = rankings[i];
+  const lineH = 38;
+  for (let i = 0; i < Math.min(displayRankings.length, 10); i++) {
+    const r = displayRankings[i];
     const y = startY + i * lineH;
     const isTop3 = i < 3;
-    const medals = ['🥇', '🥈', '🥉'];
+    const medals = ['1st', '2nd', '3rd'];
 
     ctx.font = isTop3 ? 'bold 20px "Segoe UI", sans-serif' : '18px "Segoe UI", sans-serif';
     ctx.fillStyle = isTop3 ? '#FFD700' : '#DDD';
 
     const prefix = i < 3 ? medals[i] : (i + 1) + '.';
-    const text = prefix + ' ' + r.name + '  —  ' + r.score;
+    const text = prefix + ' ' + r.name + '  -  ' + r.score;
     ctx.textAlign = 'center';
     ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
     ctx.strokeText(text, W / 2, y);
     ctx.fillText(text, W / 2, y);
   }
 
-  if (rankings.length === 0) {
+  if (displayRankings.length === 0) {
     ctx.font = '18px "Segoe UI", sans-serif'; ctx.fillStyle = '#999';
     ctx.textAlign = 'center';
-    ctx.fillText('まだ記録がありません', W / 2, startY + 40);
+    const msg = showWorldRanking ? 'No world records yet' : 'No local records yet';
+    ctx.fillText(msg, W / 2, startY + 40);
   }
+
+  // Toggle hint
+  ctx.font = '14px "Segoe UI", sans-serif'; ctx.fillStyle = '#AAA';
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+  ctx.strokeText('< tap left/right to switch >', W / 2, 510);
+  ctx.fillText('< tap left/right to switch >', W / 2, 510);
 
   const bounce = Math.sin(frameCount * 0.08) * 5;
   ctx.font = '18px "Segoe UI", sans-serif'; ctx.fillStyle = '#CCC';
   ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
   ctx.textAlign = 'center';
-  ctx.strokeText('タップでリトライ', W / 2, 540 + bounce);
-  ctx.fillText('タップでリトライ', W / 2, 540 + bounce);
+  ctx.strokeText('tap center to retry', W / 2, 550 + bounce);
+  ctx.fillText('tap center to retry', W / 2, 550 + bounce);
 }
 
 // --- Main loop ---
@@ -893,6 +1029,7 @@ const TARGET_DT = 1000 / 60; // 60fps baseline
 function update(dt) {
   const scale = dt / TARGET_DT; // 1.0 at 60fps, >1 if slower
   frameCount++;
+  if (gameState === 'playing') acRecordFrame(scale);
   updateBgBirds(scale);
   updateWeatherParticles(scale);
   updateKoji(scale);
@@ -917,6 +1054,7 @@ function update(dt) {
         pipes[i].scored = true;
         const prevScore = score;
         score += bananaType.multi;
+        acRecordPipePass(Math.floor(score));
         if (Math.floor(prevScore) < 52 && Math.floor(score) >= 52 && !kojiTriggered) triggerKoji();
       }
       if (pipes[i].x + pw < -10) pipes.splice(i, 1);
